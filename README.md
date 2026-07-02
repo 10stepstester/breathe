@@ -9,7 +9,9 @@ turns off early and the app stays silent ("caught"). Miss it and you get a macOS
 notification ("pinged"). The menu shows the daily caught/pinged score.
 
 - Deep breath = shoulder-rise excursion > 6% of shoulder width within ~6 s (MediaPipe pose).
-- Sitting tall = nose-to-shoulder height ratio ≥ 88% of the calibrated baseline.
+- Sitting tall = nose-to-shoulder height ratio above the pass line: capture both
+  a slouch pose and a tall pose from the menu; the pass line sits 55% of the way
+  up from slouch to tall. (Tall-only calibration falls back to 88% of tall.)
 - Away from desk → window is skipped silently, no stats.
 - Another app using the camera (Zoom, FaceTime) → window skipped silently
   (CoreMediaIO "device is running somewhere" check).

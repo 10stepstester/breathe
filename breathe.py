@@ -31,7 +31,8 @@ DEFAULTS = {
     "window_sec": 45,
     "remind_breath": True,
     "remind_posture": True,
-    "baseline_posture": None,
+    "posture_tall": None,
+    "posture_slouch": None,
     "stats": {"date": "", "caught": 0, "pinged": 0},
 }
 
@@ -77,7 +78,25 @@ def load_config():
             cfg.update(json.load(f))
     except (FileNotFoundError, json.JSONDecodeError):
         pass
+    # Migrate pre-two-point configs: old single baseline becomes the tall pose.
+    old = cfg.pop("baseline_posture", None)
+    if old is not None and cfg.get("posture_tall") is None:
+        cfg["posture_tall"] = old
     return cfg
+
+
+def posture_threshold(cfg):
+    """The pass line for 'sitting tall'.
+
+    With both poses captured: 55% of the way up from slouch to tall.
+    With only a tall pose: 88% of it (legacy behavior). None = don't judge.
+    """
+    tall, slouch = cfg.get("posture_tall"), cfg.get("posture_slouch")
+    if tall is None:
+        return None
+    if slouch is None or slouch >= tall:
+        return tall * 0.88
+    return slouch + 0.55 * (tall - slouch)
 
 
 def already_running():
@@ -121,7 +140,10 @@ class BreatheApp(rumps.App):
 
         self.breath_item = rumps.MenuItem("Deep breaths", callback=self.on_toggle_breath)
         self.posture_item = rumps.MenuItem("Sitting tall", callback=self.on_toggle_posture)
-        self.calibrate_item = rumps.MenuItem("Recalibrate posture…", callback=self.on_calibrate)
+        self.tall_item = rumps.MenuItem(
+            "I'm sitting how I want — capture it", callback=self.on_set_tall)
+        self.slouch_item = rumps.MenuItem(
+            "I'm slouching — capture it", callback=self.on_set_slouch)
         self.login_item = rumps.MenuItem("Start at login", callback=self.on_toggle_login)
 
         self.menu = [
@@ -140,15 +162,16 @@ class BreatheApp(rumps.App):
             self.breath_item,
             self.posture_item,
             None,
-            self.calibrate_item,
+            self.tall_item,
+            self.slouch_item,
             self.login_item,
             None,
             rumps.MenuItem("Quit", callback=self.on_quit),
         ]
         self.sync_menu_state()
 
-        if self.cfg["baseline_posture"] is None:
-            notify("Welcome! Click the lungs icon and choose Recalibrate posture to get started.")
+        if self.cfg["posture_tall"] is None:
+            notify("Welcome! Click the lungs icon and capture your good posture to get started.")
 
         self.timer = rumps.Timer(self.tick, 15)
         self.timer.start()
@@ -200,8 +223,8 @@ class BreatheApp(rumps.App):
         elif self.paused_until:
             self.status_item.title = f"Paused until {self.paused_until.strftime('%-I:%M %p')}"
             self.title = "💤"
-        elif self.cfg["baseline_posture"] is None:
-            self.status_item.title = "Not calibrated yet — run Recalibrate posture"
+        elif self.cfg["posture_tall"] is None:
+            self.status_item.title = "Not calibrated — capture your good posture below"
             self.title = "🫁"
         else:
             mins = max(0, math.ceil((self.next_check - now).total_seconds() / 60))
@@ -226,7 +249,7 @@ class BreatheApp(rumps.App):
             log("window open")
             result = vision.watch_window(
                 self.cfg["window_sec"],
-                self.cfg["baseline_posture"],
+                posture_threshold(self.cfg),
                 self.cfg["remind_breath"],
                 self.cfg["remind_posture"],
                 log=log,
@@ -261,8 +284,8 @@ class BreatheApp(rumps.App):
     def on_check_now(self, _):
         if self.watching or self.calibrating:
             return
-        if self.cfg["baseline_posture"] is None:
-            notify("Calibrate first — click Recalibrate posture in the menu.")
+        if self.cfg["posture_tall"] is None:
+            notify("Calibrate first — capture your good posture from the menu.")
             return
         self.paused_until = None
         self.sync_menu_state()
@@ -324,20 +347,26 @@ class BreatheApp(rumps.App):
         self.save()
         self.sync_menu_state()
 
-    def on_calibrate(self, _):
+    def on_set_tall(self, _):
+        self.start_capture("posture_tall", "Hold that good posture for 8 seconds…")
+
+    def on_set_slouch(self, _):
+        self.start_capture("posture_slouch", "Hold that slouch for 8 seconds…")
+
+    def start_capture(self, key, prompt):
         if self.watching or self.calibrating:
             return
         if vision.camera_in_use_elsewhere():
-            notify("Camera is busy — try calibrating after your call.")
+            notify("Camera is busy — try again after your call.")
             return
         self.calibrating = True
         self.tick()
-        notify("Calibrating for 10 seconds — sit the way you want to sit.")
-        threading.Thread(target=self.run_calibration, daemon=True).start()
+        notify(prompt)
+        threading.Thread(target=self.run_capture, args=(key,), daemon=True).start()
 
-    def run_calibration(self):
+    def run_capture(self, key):
         try:
-            baseline, error = vision.calibrate(10)
+            value, error = vision.calibrate(8)
             if error == "camera":
                 notify("Camera unavailable. Check System Settings → "
                        "Privacy & Security → Camera, then try again.")
@@ -345,19 +374,28 @@ class BreatheApp(rumps.App):
             if error == "not_visible":
                 notify("Couldn't see you clearly. Face the camera and try again.")
                 return
-            first_time = self.cfg["baseline_posture"] is None
-            self.cfg["baseline_posture"] = baseline
+            first_time = self.cfg["posture_tall"] is None
+            self.cfg[key] = value
             self.save()
-            log(f"calibrated baseline {baseline:.3f}")
-            notify("Calibration saved. You're all set." if first_time
-                   else "Calibration updated.")
-            if first_time:
+            tall, slouch = self.cfg["posture_tall"], self.cfg["posture_slouch"]
+            threshold = posture_threshold(self.cfg)
+            log(f"captured {key}={value:.3f} → threshold {threshold}")
+            if key == "posture_slouch" and tall is not None and slouch >= tall:
+                notify("Hmm — that slouch measured taller than your good posture. "
+                       "Recapture both when you get a chance.")
+            elif tall is not None and slouch is not None:
+                notify(f"Got it. Pass line is now {threshold:.2f} "
+                       f"(your slouch {slouch:.2f} ↔ your tall {tall:.2f}).")
+            else:
+                notify("Got it. Now capture the other posture "
+                       "(both buttons are in the menu).")
+            if first_time and key == "posture_tall":
                 self.next_check = datetime.now().astimezone() + timedelta(
                     minutes=self.cfg["interval_min"]
                 )
         except Exception as e:
-            log(f"calibration error: {e}")
-            notify("Calibration failed — see breathe.log.")
+            log(f"capture error: {e}")
+            notify("Capture failed — see breathe.log.")
         finally:
             self.calibrating = False
 
@@ -401,7 +439,7 @@ class BreatheApp(rumps.App):
 
 if __name__ == "__main__":
     if "--preview" in sys.argv:
-        vision.preview(load_config()["baseline_posture"])
+        vision.preview(posture_threshold(load_config()))
         sys.exit(0)
     if already_running():
         log("another instance is already running — exiting")

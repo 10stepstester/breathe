@@ -21,8 +21,8 @@ NOSE, L_SHOULDER, R_SHOULDER = 0, 11, 12
 # within a rolling 6-second span. Normal breathing barely moves the shoulders.
 BREATH_AMPLITUDE_FRAC = 0.06
 BREATH_SPAN_SEC = 6.0
-# Sitting tall = nose-to-shoulder height ratio at or above this fraction of the
-# calibrated baseline, sustained over the last 3 seconds.
+# Fallback when only a tall pose is calibrated (no slouch reference):
+# sitting tall = ratio >= 88% of the tall baseline, sustained over 3 seconds.
 POSTURE_OK_FRAC = 0.88
 POSTURE_SPAN_SEC = 3.0
 TARGET_FPS = 15
@@ -92,7 +92,8 @@ def _landmarks(results):
     return nose.y, (ls.y + rs.y) / 2.0, width
 
 
-def watch_window(window_sec, baseline, check_breath, check_posture, log=None):
+def watch_window(window_sec, posture_threshold, check_breath, check_posture,
+                 log=None):
     """Open the camera for up to window_sec seconds and watch for the good stuff.
 
     Returns {"present": bool, "breath": bool, "posture": bool, "error": str|None}.
@@ -114,7 +115,7 @@ def watch_window(window_sec, baseline, check_breath, check_posture, log=None):
     posture_samples = []   # (t, nose-to-shoulder ratio)
     ema = None
     breath_done = not check_breath
-    posture_done = not check_posture or baseline is None
+    posture_done = not check_posture or posture_threshold is None
     deadline = time.monotonic() + window_sec
 
     try:
@@ -147,7 +148,7 @@ def watch_window(window_sec, baseline, check_breath, check_posture, log=None):
                 if not posture_done:
                     recent = [s for s in posture_samples if now - s[0] <= POSTURE_SPAN_SEC]
                     if len(recent) >= 10:
-                        if median(s[1] for s in recent) >= baseline * POSTURE_OK_FRAC:
+                        if median(s[1] for s in recent) >= posture_threshold:
                             posture_done = True
                             if log:
                                 log("sitting tall detected")
@@ -165,7 +166,7 @@ def watch_window(window_sec, baseline, check_breath, check_posture, log=None):
     return result
 
 
-def preview(baseline, max_sec=120):
+def preview(posture_threshold, max_sec=120):
     """Live debug window: skeleton dots + the exact numbers being judged.
 
     Runs as its own process (--preview) because macOS GUI windows must own
@@ -218,12 +219,11 @@ def preview(baseline, max_sec=120):
                 ]
 
                 ratio = (shoulder_y - nose_y) / width
-                if baseline:
-                    need = baseline * POSTURE_OK_FRAC
+                if posture_threshold:
+                    need = posture_threshold
                     tall = ratio >= need
                     put(frame,
-                        f"posture {ratio:.2f}  (tall = {need:.2f}+, "
-                        f"your calibrated best {baseline:.2f})",
+                        f"posture {ratio:.2f}  (tall = {need:.2f}+)",
                         40, (0, 200, 0) if tall else (0, 0, 255))
                     put(frame, "SITTING TALL" if tall else "SLOUCHED",
                         80, (0, 200, 0) if tall else (0, 0, 255), 1.0)
