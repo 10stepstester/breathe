@@ -107,6 +107,7 @@ class BreatheApp(rumps.App):
         self.status_item = rumps.MenuItem("Starting up")
         self.stats_item = rumps.MenuItem("")
         self.check_now = rumps.MenuItem("Check now", callback=self.on_check_now)
+        self.preview_item = rumps.MenuItem("Show what it sees…", callback=self.on_preview)
         self.pause_hour = rumps.MenuItem("Pause for 1 hour", callback=self.on_pause_hour)
         self.pause_day = rumps.MenuItem("Pause until tomorrow", callback=self.on_pause_day)
         self.resume_item = rumps.MenuItem("Resume now", callback=self.on_resume)
@@ -128,6 +129,7 @@ class BreatheApp(rumps.App):
             self.stats_item,
             None,
             self.check_now,
+            self.preview_item,
             self.pause_hour,
             self.pause_day,
             self.resume_item,
@@ -267,6 +269,18 @@ class BreatheApp(rumps.App):
         self.start_window()
         self.tick()
 
+    def on_preview(self, _):
+        if self.watching or self.calibrating:
+            notify("Camera is mid-check — try again in a minute.")
+            return
+        # The preview holds the camera, which makes scheduled checks skip
+        # themselves (camera-busy check), so no guard needed beyond a nudge.
+        self.next_check = max(
+            self.next_check,
+            datetime.now().astimezone() + timedelta(minutes=3),
+        )
+        subprocess.Popen([APP_EXECUTABLE, "--preview"])
+
     def on_pause_hour(self, _):
         self.paused_until = datetime.now().astimezone() + timedelta(hours=1)
         self.sync_menu_state()
@@ -386,6 +400,9 @@ class BreatheApp(rumps.App):
 
 
 if __name__ == "__main__":
+    if "--preview" in sys.argv:
+        vision.preview(load_config()["baseline_posture"])
+        sys.exit(0)
     if already_running():
         log("another instance is already running — exiting")
         sys.exit(0)

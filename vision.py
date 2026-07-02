@@ -165,6 +165,100 @@ def watch_window(window_sec, baseline, check_breath, check_posture, log=None):
     return result
 
 
+def preview(baseline, max_sec=120):
+    """Live debug window: skeleton dots + the exact numbers being judged.
+
+    Runs as its own process (--preview) because macOS GUI windows must own
+    the main thread. Press Q or Esc to close; auto-closes after max_sec.
+    """
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        return
+    pose = mp.solutions.pose.Pose(
+        model_complexity=0,
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    drawer = mp.solutions.drawing_utils
+    shoulder_samples = []
+    ema = None
+    breath_flash_until = 0.0
+    win = "Breathe - what it sees (press Q to close)"
+
+    def put(frame, text, y, color, scale=0.7):
+        cv2.putText(frame, text, (12, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    scale, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(frame, text, (12, y), cv2.FONT_HERSHEY_SIMPLEX,
+                    scale, color, 2, cv2.LINE_AA)
+
+    deadline = time.monotonic() + max_sec
+    try:
+        while time.monotonic() < deadline:
+            ok, frame = cap.read()
+            if not ok:
+                time.sleep(0.05)
+                continue
+            results = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if results.pose_landmarks:
+                drawer.draw_landmarks(
+                    frame, results.pose_landmarks,
+                    mp.solutions.pose.POSE_CONNECTIONS)
+            frame = cv2.flip(frame, 1)
+            lms = _landmarks(results)
+            now = time.monotonic()
+
+            if lms is None:
+                put(frame, "Can't see nose + both shoulders", 40, (0, 0, 255))
+            else:
+                nose_y, shoulder_y, width = lms
+                ema = shoulder_y if ema is None else 0.3 * shoulder_y + 0.7 * ema
+                shoulder_samples.append((now, ema, width))
+                shoulder_samples = [
+                    s for s in shoulder_samples if now - s[0] <= BREATH_SPAN_SEC
+                ]
+
+                ratio = (shoulder_y - nose_y) / width
+                if baseline:
+                    need = baseline * POSTURE_OK_FRAC
+                    tall = ratio >= need
+                    put(frame,
+                        f"posture {ratio:.2f}  (tall = {need:.2f}+, "
+                        f"your calibrated best {baseline:.2f})",
+                        40, (0, 200, 0) if tall else (0, 0, 255))
+                    put(frame, "SITTING TALL" if tall else "SLOUCHED",
+                        80, (0, 200, 0) if tall else (0, 0, 255), 1.0)
+                else:
+                    put(frame, f"posture {ratio:.2f} (not calibrated yet)",
+                        40, (0, 200, 255))
+
+                if len(shoulder_samples) >= 10:
+                    ys = [s[1] for s in shoulder_samples]
+                    scale = median(s[2] for s in shoulder_samples)
+                    amp = max(ys) - min(ys)
+                    need_amp = BREATH_AMPLITUDE_FRAC * scale
+                    if amp > need_amp:
+                        breath_flash_until = now + 3.0
+                    put(frame,
+                        f"shoulder movement {amp:.3f}  (deep breath = {need_amp:.3f}+)",
+                        120, (0, 200, 0) if amp > need_amp else (200, 200, 200))
+                if now < breath_flash_until:
+                    put(frame, "DEEP BREATH DETECTED", 160, (0, 200, 0), 1.0)
+
+            cv2.imshow(win, frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+            try:
+                if cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            except cv2.error:
+                break
+    finally:
+        cap.release()
+        pose.close()
+        cv2.destroyAllWindows()
+
+
 def calibrate(seconds=10):
     """Capture the sitting-tall posture baseline.
 
