@@ -59,6 +59,7 @@ class CameraWorker(threading.Thread):
         super().__init__(daemon=True)
         self.jpeg = None
         self.feats = None
+        self.feats_hist = []  # (t, feats) over the last ~2 s, for smoothing
         self.error = None
         self.job = None
         self.last_result = None
@@ -120,6 +121,13 @@ class CameraWorker(threading.Thread):
                 clean = frame.copy()
                 lms = vision._landmarks(results)
                 self.feats = lms[0] if lms else None
+                t = time.monotonic()
+                if self.feats:
+                    self.feats_hist = ([f for f in self.feats_hist
+                                        if t - f[0] <= 2.0]
+                                       + [(t, self.feats)])
+                elif self.feats_hist and t - self.feats_hist[-1][0] > 2.0:
+                    self.feats_hist = []
 
                 job = self.job
                 now = time.monotonic()
@@ -175,8 +183,11 @@ def state():
     tall, slouch = cfg.get("posture_tall"), cfg.get("posture_slouch")
     feats = worker.feats
     score = None
-    if feats and tall:
-        score = vision._pose_score(feats, tall, slouch)
+    hist = worker.feats_hist
+    if hist and tall:
+        keys = set(hist[-1][1])
+        smoothed = {k: median(f[1][k] for f in hist if k in f[1]) for k in keys}
+        score = vision._pose_score(smoothed, tall, slouch)
     job = worker.job
     return jsonify({
         "config": cfg,

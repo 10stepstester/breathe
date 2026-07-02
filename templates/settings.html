@@ -20,14 +20,20 @@
   .verdict { font-size: 22px; font-weight: 700; text-align: center; margin: 10px 0 2px; }
   .tall { color: #0f8a5f; } .slouch { color: #cc3b2f; } .na { color: #999; font-size: 16px; font-weight: 500; }
 
-  .meter { position: relative; height: 46px; margin: 14px 6px 2px; }
-  .meter .track { position: absolute; top: 20px; left: 0; right: 0; height: 8px;
+  .meter { position: relative; height: 56px; margin: 18px 6px 2px; }
+  .meter .track { position: absolute; top: 26px; left: 0; right: 0; height: 8px;
                   border-radius: 4px; background: linear-gradient(to right, #e08477, #e5d9a8, #7fc99e); }
-  .meter .passline { position: absolute; top: 10px; width: 2px; height: 28px; background: #555; }
-  .meter .passlabel { position: absolute; top: -6px; font-size: 10px; color: #777; transform: translateX(-50%); }
-  .meter .you { position: absolute; top: 13px; width: 22px; height: 22px; border-radius: 50%;
+  .meter .passlabel { position: absolute; top: 0; font-size: 11px; color: #555; font-weight: 600;
+                      transform: translateX(-50%); white-space: nowrap; }
+  .meter .passhandle { position: absolute; top: 14px; width: 26px; height: 34px;
+                       transform: translateX(-50%); cursor: grab; touch-action: none; z-index: 2; }
+  .meter .passhandle::after { content: ""; position: absolute; left: 50%; top: 0; width: 5px;
+                              height: 100%; transform: translateX(-50%); background: #555;
+                              border-radius: 3px; }
+  .meter .passhandle:active { cursor: grabbing; }
+  .meter .you { position: absolute; top: 19px; width: 22px; height: 22px; border-radius: 50%;
                 background: #2c6bd8; border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35);
-                transform: translateX(-50%); transition: left .25s; }
+                transform: translateX(-50%); transition: left .4s; z-index: 1; }
   .meter-ends { display: flex; justify-content: space-between; font-size: 12px; color: #888; margin: 0 6px 4px; }
   .explain { font-size: 13px; color: #666; margin: 10px 6px 0; line-height: 1.45; }
   @media (prefers-color-scheme: dark) { .explain { color:#aaa } }
@@ -72,22 +78,20 @@
 
 <div class="card">
   <div class="verdict na" id="verdict">Waiting for camera…</div>
-  <div class="meter">
+  <div class="meter" id="meter">
     <div class="track"></div>
-    <div class="passline" id="passline"></div>
-    <div class="passlabel" id="passlabel">pass line</div>
+    <div class="passlabel" id="passlabel">pass</div>
+    <div class="passhandle" id="passhandle" title="Drag to make it stricter or more lenient"></div>
     <div class="you" id="youdot" style="left: 50%"></div>
   </div>
-  <div class="meter-ends"><span>← your slouch</span><span>your tall pose →</span></div>
-  <div style="margin: 12px 6px 0;">
-    <input type="range" id="passslider" min="30" max="80" value="55">
-    <div style="display:flex; justify-content:space-between; font-size:12px; color:#888;">
-      <span>lenient</span><span id="passval">pass line: 0.55</span><span>strict</span>
-    </div>
-  </div>
-  <p class="explain">The blue dot is you, right now, placed between your two captured
-  poses. Land to the right of the pass line and checks count you as sitting tall.
-  Drag the slider to move the line.</p>
+  <div class="meter-ends"><span>← your slouch (0%)</span><span>your tall pose (100%) →</span></div>
+  <p class="explain">One meter, two things on it. The <b style="color:#2c6bd8">blue dot is
+  you</b>, right now: 0% means you look exactly like your captured slouch, 100% exactly
+  like your captured tall pose (you can beat 100% by standing even taller). The
+  <b>dark handle is the pass line</b> — during a check you count as sitting tall once
+  the dot stays past it. Drag the handle left to make the app more lenient, right for
+  stricter. The dot is averaged over the last 2 seconds, so it moves like you do,
+  not like static.</p>
 </div>
 
 <div class="card poses" style="border: none; background: transparent; padding: 0;">
@@ -163,14 +167,13 @@ function render(st) {
     v.className = "verdict na";
   } else {
     const ok = st.score >= st.pass_line;
-    v.textContent = (ok ? "SITTING TALL" : "SLOUCHED") + "  ·  score " + st.score.toFixed(2);
+    const pct = Math.round(st.score * 100);
+    v.textContent = (ok ? "SITTING TALL" : "SLOUCHED") + "  ·  " + pct + "%"
+                    + (pct > 110 ? " — beyond your tall pose!" : "");
     v.className = "verdict " + (ok ? "tall" : "slouch");
     $("youdot").style.left = scoreToPct(st.score) + "%";
   }
-  if (st.pass_line != null) {
-    $("passline").style.left = scoreToPct(st.pass_line) + "%";
-    $("passlabel").style.left = scoreToPct(st.pass_line) + "%";
-  }
+  if (st.pass_line != null && !draggingPass) setPassUI(st.pass_line);
 
   for (const kind of ["tall", "slouch"]) {
     const has = st.photos && st.photos[kind];
@@ -198,11 +201,6 @@ function render(st) {
   }
   $("remind_breath").checked = cfg.remind_breath ?? true;
   $("remind_posture").checked = cfg.remind_posture ?? true;
-  if (document.activeElement !== $("passslider")) {
-    const p = Math.round((cfg.pass_score ?? 0.55) * 100);
-    $("passslider").value = p;
-    $("passval").textContent = "pass line: " + (p / 100).toFixed(2);
-  }
   if (!editingAdv) renderAdv();
 
   if (st.last_result && st.last_result.msg !== lastResultMsg) {
@@ -235,14 +233,40 @@ function renderAdv() {
   });
 }
 
+let draggingPass = false, passTemp = null;
+
+function setPassUI(score) {
+  const pct = scoreToPct(score);
+  $("passhandle").style.left = pct + "%";
+  $("passlabel").style.left = pct + "%";
+  $("passlabel").textContent = "pass: " + Math.round(score * 100) + "%";
+}
+
+$("passhandle").addEventListener("pointerdown", e => {
+  draggingPass = true;
+  e.target.setPointerCapture(e.pointerId);
+  e.preventDefault();
+});
+document.addEventListener("pointermove", e => {
+  if (!draggingPass) return;
+  const r = $("meter").getBoundingClientRect();
+  let s = ((e.clientX - r.left) / r.width) * 1.3 - 0.15;
+  s = Math.max(0.30, Math.min(0.80, s));
+  passTemp = Math.round(s * 100) / 100;
+  setPassUI(passTemp);
+});
+document.addEventListener("pointerup", () => {
+  if (!draggingPass) return;
+  draggingPass = false;
+  if (passTemp != null) post("/config", {pass_score: passTemp}).then(() => toast("Saved"));
+});
+
 $("cap-tall").onclick = () => post("/capture/tall");
 $("cap-slouch").onclick = () => post("/capture/slouch");
 $("interval").onchange = e => post("/config", {interval_min: +e.target.value}).then(() => toast("Saved"));
 $("window").onchange = e => post("/config", {window_sec: +e.target.value}).then(() => toast("Saved"));
 $("remind_breath").onchange = e => post("/config", {remind_breath: e.target.checked}).then(() => toast("Saved"));
 $("remind_posture").onchange = e => post("/config", {remind_posture: e.target.checked}).then(() => toast("Saved"));
-$("passslider").oninput = e => $("passval").textContent = "pass line: " + (e.target.value / 100).toFixed(2);
-$("passslider").onchange = e => post("/config", {pass_score: e.target.value / 100}).then(() => toast("Saved"));
 
 async function poll() {
   try {
