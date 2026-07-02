@@ -3,3 +3,4 @@ config.json
 breathe.log
 breathe.pid
 __pycache__/
+captures/

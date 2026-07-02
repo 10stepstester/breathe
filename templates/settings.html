@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Breathe settings</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 16px;
+         background: #f4f2ec; color: #2c2c2a; max-width: 760px; margin-inline: auto; }
+  @media (prefers-color-scheme: dark) { body { background: #1e1e1c; color: #eee; }
+    .card { background: #2a2a28 !important; border-color: #3a3a38 !important; } }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .sub { font-size: 12px; color: #888; margin-bottom: 14px; }
+  .card { background: #fff; border: 1px solid #ddd8cc; border-radius: 12px;
+          padding: 14px; margin-bottom: 12px; }
+  .video-wrap { padding: 0; overflow: hidden; }
+  .video-wrap img { display: block; width: 100%; }
+  .verdict { font-size: 22px; font-weight: 700; text-align: center; margin: 10px 0 2px; }
+  .tall { color: #0f8a5f; } .slouch { color: #cc3b2f; } .na { color: #999; font-size: 16px; font-weight: 500; }
+
+  .meter { position: relative; height: 46px; margin: 14px 6px 2px; }
+  .meter .track { position: absolute; top: 20px; left: 0; right: 0; height: 8px;
+                  border-radius: 4px; background: linear-gradient(to right, #e08477, #e5d9a8, #7fc99e); }
+  .meter .passline { position: absolute; top: 10px; width: 2px; height: 28px; background: #555; }
+  .meter .passlabel { position: absolute; top: -6px; font-size: 10px; color: #777; transform: translateX(-50%); }
+  .meter .you { position: absolute; top: 13px; width: 22px; height: 22px; border-radius: 50%;
+                background: #2c6bd8; border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35);
+                transform: translateX(-50%); transition: left .25s; }
+  .meter-ends { display: flex; justify-content: space-between; font-size: 12px; color: #888; margin: 0 6px 4px; }
+  .explain { font-size: 13px; color: #666; margin: 10px 6px 0; line-height: 1.45; }
+  @media (prefers-color-scheme: dark) { .explain { color:#aaa } }
+
+  .poses { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) { .poses { grid-template-columns: 1fr; } }
+  .pose h3 { font-size: 15px; margin: 0 0 2px; }
+  .pose .when { font-size: 11px; color: #999; margin-bottom: 8px; min-height: 13px; }
+  .pose img { width: 100%; border-radius: 8px; background: #ccc; aspect-ratio: 4/3; object-fit: cover; }
+  .pose .nophoto { width: 100%; aspect-ratio: 4/3; border-radius: 8px; background: #eee;
+                   display: flex; align-items: center; justify-content: center; color: #999; font-size: 13px; }
+  button { font: inherit; width: 100%; margin-top: 10px; padding: 10px; border-radius: 8px;
+           border: 1px solid #bbb; background: #fafaf7; cursor: pointer; font-weight: 600; }
+  button:hover { background: #f0efe8; } button:disabled { opacity: .5; cursor: default; }
+  @media (prefers-color-scheme: dark) { button { background:#333; color:#eee; border-color:#555 } }
+
+  .gaps { font-size: 13px; line-height: 1.6; }
+  .gapbar { display: inline-block; height: 8px; background: #7fc99e; border-radius: 4px;
+            vertical-align: middle; margin-right: 8px; }
+  .ignored { color: #aaa; } .ignored .gapbar { background: #ccc; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 14px; }
+  select, input[type=number] { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid #bbb; }
+  input[type=range] { width: 100%; }
+  label { user-select: none; }
+  details { margin-top: 4px; } summary { cursor: pointer; font-size: 13px; color: #888; }
+  .adv { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 13px; }
+  .adv input { width: 74px; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+           background: #2c2c2a; color: #fff; padding: 10px 18px; border-radius: 8px;
+           font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<h1>🫁 Breathe settings</h1>
+<div class="sub">Runs on your Mac only — nothing recorded, nothing uploaded.</div>
+
+<div class="card video-wrap">
+  <img src="/stream.mjpg" alt="Live camera view with pose skeleton">
+</div>
+
+<div class="card">
+  <div class="verdict na" id="verdict">Waiting for camera…</div>
+  <div class="meter">
+    <div class="track"></div>
+    <div class="passline" id="passline"></div>
+    <div class="passlabel" id="passlabel">pass line</div>
+    <div class="you" id="youdot" style="left: 50%"></div>
+  </div>
+  <div class="meter-ends"><span>← your slouch</span><span>your tall pose →</span></div>
+  <div style="margin: 12px 6px 0;">
+    <input type="range" id="passslider" min="30" max="80" value="55">
+    <div style="display:flex; justify-content:space-between; font-size:12px; color:#888;">
+      <span>lenient</span><span id="passval">pass line: 0.55</span><span>strict</span>
+    </div>
+  </div>
+  <p class="explain">The blue dot is you, right now, placed between your two captured
+  poses. Land to the right of the pass line and checks count you as sitting tall.
+  Drag the slider to move the line.</p>
+</div>
+
+<div class="card poses" style="border: none; background: transparent; padding: 0;">
+  <div class="card pose">
+    <h3>✅ How I want to be</h3>
+    <div class="when" id="tall-when"></div>
+    <img id="tall-photo" style="display:none" alt="Your captured tall pose">
+    <div class="nophoto" id="tall-nophoto">not captured yet</div>
+    <button id="cap-tall">Recapture (3 s to get ready, hold 8 s)</button>
+  </div>
+  <div class="card pose">
+    <h3>❌ My slouch</h3>
+    <div class="when" id="slouch-when"></div>
+    <img id="slouch-photo" style="display:none" alt="Your captured slouch pose">
+    <div class="nophoto" id="slouch-nophoto">not captured yet</div>
+    <button id="cap-slouch">Recapture (3 s to get ready, hold 8 s)</button>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="font-size:15px; margin:0 0 8px;">How it tells your two poses apart</h3>
+  <div class="gaps" id="gaps">Capture both poses to see this.</div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <label>Check every
+      <select id="interval"><option>5</option><option>10</option><option>15</option><option>20</option><option>30</option></select> min
+    </label>
+    <label>Watch for
+      <select id="window"><option>30</option><option>45</option><option>60</option><option>90</option></select> sec
+    </label>
+    <label><input type="checkbox" id="remind_breath"> Deep breaths</label>
+    <label><input type="checkbox" id="remind_posture"> Posture</label>
+  </div>
+  <details>
+    <summary>Advanced: raw numbers (edit only if you know why)</summary>
+    <div class="adv" id="advbox"></div>
+  </details>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let cfg = {}, lastResultMsg = null, editingAdv = false;
+
+function toast(msg) {
+  $("toast").textContent = msg;
+  $("toast").classList.add("show");
+  setTimeout(() => $("toast").classList.remove("show"), 2500);
+}
+
+function post(url, body) {
+  return fetch(url, {method: "POST", headers: {"Content-Type": "application/json"},
+                     body: JSON.stringify(body || {})});
+}
+
+function scoreToPct(s) {
+  const clamped = Math.max(-0.15, Math.min(1.15, s));
+  return ((clamped + 0.15) / 1.3) * 100;
+}
+
+function render(st) {
+  cfg = st.config || {};
+  const v = $("verdict");
+  if (st.camera_error) { v.textContent = "Camera unavailable"; v.className = "verdict slouch"; }
+  else if (st.capturing) {
+    v.textContent = st.capturing.phase === "countdown" ? "Get ready…" : "Hold the pose…";
+    v.className = "verdict na";
+  } else if (st.score == null) {
+    v.textContent = st.feats ? "Capture both poses below to start scoring" : "Step into view…";
+    v.className = "verdict na";
+  } else {
+    const ok = st.score >= st.pass_line;
+    v.textContent = (ok ? "SITTING TALL" : "SLOUCHED") + "  ·  score " + st.score.toFixed(2);
+    v.className = "verdict " + (ok ? "tall" : "slouch");
+    $("youdot").style.left = scoreToPct(st.score) + "%";
+  }
+  if (st.pass_line != null) {
+    $("passline").style.left = scoreToPct(st.pass_line) + "%";
+    $("passlabel").style.left = scoreToPct(st.pass_line) + "%";
+  }
+
+  for (const kind of ["tall", "slouch"]) {
+    const has = st.photos && st.photos[kind];
+    $(kind + "-photo").style.display = has ? "block" : "none";
+    $(kind + "-nophoto").style.display = has ? "none" : "flex";
+    $(kind + "-when").textContent = cfg["posture_" + kind + "_at"]
+      ? "captured " + cfg["posture_" + kind + "_at"] : "";
+    $("cap-" + kind).disabled = !!st.capturing;
+  }
+
+  if (st.gaps && st.gaps.length) {
+    $("gaps").innerHTML = st.gaps.map(g =>
+      `<div class="${g.used ? "" : "ignored"}">
+        <span class="gapbar" style="width:${Math.min(100, g.pct * 10)}px"></span>
+        ${g.label}: ${g.pct}% different ${g.used ? "— using this" : "— too small, ignored"}
+      </div>`).join("") +
+      (st.gaps.some(g => g.used) ? "" :
+        `<div style="color:#cc3b2f; margin-top:6px;">Your two poses look the same to the
+         camera — exaggerate the difference and recapture both.</div>`);
+  }
+
+  if (document.activeElement.tagName !== "SELECT") {
+    $("interval").value = cfg.interval_min ?? 10;
+    $("window").value = cfg.window_sec ?? 45;
+  }
+  $("remind_breath").checked = cfg.remind_breath ?? true;
+  $("remind_posture").checked = cfg.remind_posture ?? true;
+  if (document.activeElement !== $("passslider")) {
+    const p = Math.round((cfg.pass_score ?? 0.55) * 100);
+    $("passslider").value = p;
+    $("passval").textContent = "pass line: " + (p / 100).toFixed(2);
+  }
+  if (!editingAdv) renderAdv();
+
+  if (st.last_result && st.last_result.msg !== lastResultMsg) {
+    lastResultMsg = st.last_result.msg;
+    toast(st.last_result.ok ? "Captured — updated below" : st.last_result.msg);
+  }
+}
+
+function renderAdv() {
+  const box = $("advbox");
+  let html = "";
+  for (const kind of ["tall", "slouch"]) {
+    const p = cfg["posture_" + kind];
+    if (!p) continue;
+    for (const key of Object.keys(p).sort()) {
+      html += `<label>${kind} ${key}
+        <input type="number" step="0.01" data-kind="${kind}" data-key="${key}"
+               value="${p[key].toFixed(3)}"></label>`;
+    }
+  }
+  box.innerHTML = html || "Capture poses first.";
+  box.querySelectorAll("input").forEach(inp => {
+    inp.addEventListener("focus", () => editingAdv = true);
+    inp.addEventListener("blur", () => editingAdv = false);
+    inp.addEventListener("change", () => {
+      const p = {...cfg["posture_" + inp.dataset.kind]};
+      p[inp.dataset.key] = parseFloat(inp.value);
+      post("/config", {["posture_" + inp.dataset.kind]: p}).then(() => toast("Saved"));
+    });
+  });
+}
+
+$("cap-tall").onclick = () => post("/capture/tall");
+$("cap-slouch").onclick = () => post("/capture/slouch");
+$("interval").onchange = e => post("/config", {interval_min: +e.target.value}).then(() => toast("Saved"));
+$("window").onchange = e => post("/config", {window_sec: +e.target.value}).then(() => toast("Saved"));
+$("remind_breath").onchange = e => post("/config", {remind_breath: e.target.checked}).then(() => toast("Saved"));
+$("remind_posture").onchange = e => post("/config", {remind_posture: e.target.checked}).then(() => toast("Saved"));
+$("passslider").oninput = e => $("passval").textContent = "pass line: " + (e.target.value / 100).toFixed(2);
+$("passslider").onchange = e => post("/config", {pass_score: e.target.value / 100}).then(() => toast("Saved"));
+
+async function poll() {
+  try {
+    const st = await (await fetch("/state")).json();
+    render(st);
+    for (const kind of ["tall", "slouch"]) {
+      const img = $(kind + "-photo");
+      if (st.photos[kind] && (!img.src || (st.last_result && st.last_result.kind === kind
+          && st.last_result.msg !== img.dataset.seen))) {
+        img.src = "/captures/" + kind + ".jpg?t=" + Date.now();
+        if (st.last_result) img.dataset.seen = st.last_result.msg;
+      }
+    }
+  } catch (e) { /* server closing */ }
+  setTimeout(poll, 600);
+}
+poll();
+</script>
+</body>
+</html>

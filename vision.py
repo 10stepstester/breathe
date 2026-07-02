@@ -147,12 +147,44 @@ def _pose_score(feats, tall, slouch):
     return None
 
 
-def _pass_line(slouch):
-    return PASS_SCORE if slouch else POSTURE_OK_FRAC
+def _pass_line(slouch, pass_score=None):
+    if slouch:
+        return pass_score if pass_score else PASS_SCORE
+    return POSTURE_OK_FRAC
+
+
+FEATURE_LABELS = {
+    "height": "head height above shoulders",
+    "face": "head-to-screen distance",
+}
+
+
+def feature_gaps(tall, slouch):
+    """Plain-English view of how the two reference poses differ.
+
+    Returns [{key, label, pct, used}] — pct is the relative gap in percent,
+    used is whether the feature is big enough to count toward the score.
+    """
+    out = []
+    if not tall or not slouch:
+        return out
+    for key in sorted(set(tall) & set(slouch)):
+        ref = (abs(tall[key]) + abs(slouch[key])) / 2.0
+        if ref == 0:
+            continue
+        rel = abs(tall[key] - slouch[key]) / ref
+        out.append({
+            "key": key,
+            "label": FEATURE_LABELS.get(key, key),
+            "pct": round(rel * 100, 1),
+            "used": rel >= MIN_FEATURE_GAP,
+        })
+    out.sort(key=lambda g: -g["pct"])
+    return out
 
 
 def watch_window(window_sec, tall, slouch, check_breath, check_posture,
-                 log=None):
+                 pass_score=None, log=None):
     """Open the camera for up to window_sec seconds and watch for the good stuff.
 
     Returns {"present": bool, "breath": bool, "posture": bool, "error": str|None}.
@@ -210,7 +242,7 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
                 if not posture_done:
                     recent = [s for s in posture_samples if now - s[0] <= POSTURE_SPAN_SEC]
                     if len(recent) >= 10:
-                        if median(s[1] for s in recent) >= _pass_line(slouch):
+                        if median(s[1] for s in recent) >= _pass_line(slouch, pass_score):
                             posture_done = True
                             if log:
                                 log("sitting tall detected")
@@ -228,7 +260,7 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
     return result
 
 
-def preview(tall, slouch, max_sec=120):
+def preview(tall, slouch, pass_score=None, max_sec=120):
     """Live debug window: skeleton dots + the exact numbers being judged.
 
     Runs as its own process (--preview) because macOS GUI windows must own
@@ -282,7 +314,7 @@ def preview(tall, slouch, max_sec=120):
 
                 if tall:
                     score = _pose_score(feats, tall, slouch)
-                    need = _pass_line(slouch)
+                    need = _pass_line(slouch, pass_score)
                     if score is None:
                         put(frame,
                             "Poses too similar to judge - recapture both",
@@ -330,17 +362,19 @@ def preview(tall, slouch, max_sec=120):
         cv2.destroyAllWindows()
 
 
-def calibrate(seconds=10):
+def calibrate(seconds=10, snapshot_path=None):
     """Capture a posture reference (hold the pose while it runs).
 
     Returns (features dict, None) on success, (None, "camera") if the camera
     couldn't open, or (None, "not_visible") if no clear view of the body.
+    Saves a mirrored snapshot of the pose to snapshot_path if given.
     """
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         return None, "camera"
     pose = mp.solutions.pose.Pose(model_complexity=0, min_detection_confidence=0.5)
     samples = []
+    snapshot = None
     deadline = time.monotonic() + seconds
     try:
         while time.monotonic() < deadline:
@@ -348,10 +382,11 @@ def calibrate(seconds=10):
             if not ok:
                 time.sleep(0.1)
                 continue
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            lms = _landmarks(pose.process(frame))
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            lms = _landmarks(pose.process(rgb))
             if lms is not None:
                 samples.append(lms[0])
+                snapshot = frame
             time.sleep(1.0 / TARGET_FPS)
     finally:
         cap.release()
@@ -365,4 +400,9 @@ def calibrate(seconds=10):
             feats[key] = median(vals)
     if "height" not in feats:
         return None, "not_visible"
+    if snapshot_path and snapshot is not None:
+        try:
+            cv2.imwrite(snapshot_path, cv2.flip(snapshot, 1))
+        except cv2.error:
+            pass
     return feats, None

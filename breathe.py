@@ -33,8 +33,12 @@ DEFAULTS = {
     "remind_posture": True,
     "posture_tall": None,
     "posture_slouch": None,
+    "posture_tall_at": None,
+    "posture_slouch_at": None,
+    "pass_score": 0.55,
     "stats": {"date": "", "caught": 0, "pinged": 0},
 }
+CAPTURE_DIR = os.path.join(APP_DIR, "captures")
 
 
 def log(msg):
@@ -116,6 +120,7 @@ class BreatheApp(rumps.App):
         self.stats_item = rumps.MenuItem("")
         self.check_now = rumps.MenuItem("Check now", callback=self.on_check_now)
         self.preview_item = rumps.MenuItem("Show what it sees…", callback=self.on_preview)
+        self.settings_item = rumps.MenuItem("Settings…", callback=self.on_settings)
         self.pause_hour = rumps.MenuItem("Pause for 1 hour", callback=self.on_pause_hour)
         self.pause_day = rumps.MenuItem("Pause until tomorrow", callback=self.on_pause_day)
         self.resume_item = rumps.MenuItem("Resume now", callback=self.on_resume)
@@ -141,6 +146,7 @@ class BreatheApp(rumps.App):
             None,
             self.check_now,
             self.preview_item,
+            self.settings_item,
             self.pause_hour,
             self.pause_day,
             self.resume_item,
@@ -171,8 +177,27 @@ class BreatheApp(rumps.App):
         try:
             with open(CONFIG_PATH, "w") as f:
                 json.dump(self.cfg, f, indent=2)
+            self._cfg_mtime = os.path.getmtime(CONFIG_PATH)
         except OSError as e:
             log(f"config save failed: {e}")
+
+    def reload_if_changed(self):
+        """Pick up edits made by the settings page (separate process)."""
+        if self.watching or self.calibrating:
+            return
+        try:
+            mtime = os.path.getmtime(CONFIG_PATH)
+        except OSError:
+            return
+        if mtime != getattr(self, "_cfg_mtime", None):
+            self._cfg_mtime = mtime
+            old_interval = self.cfg["interval_min"]
+            self.cfg = load_config()
+            if self.cfg["interval_min"] != old_interval:
+                self.next_check = datetime.now().astimezone() + timedelta(
+                    minutes=self.cfg["interval_min"])
+            self.sync_menu_state()
+            log("config reloaded from disk")
 
     def roll_stats(self):
         today = datetime.now().astimezone().date().isoformat()
@@ -193,6 +218,7 @@ class BreatheApp(rumps.App):
         self.resume_item.set_callback(self.on_resume if self.paused_until else None)
 
     def tick(self, _timer=None):
+        self.reload_if_changed()
         self.roll_stats()
         now = datetime.now().astimezone()
         s = self.cfg["stats"]
@@ -242,6 +268,7 @@ class BreatheApp(rumps.App):
                 self.cfg["posture_slouch"],
                 self.cfg["remind_breath"],
                 self.cfg["remind_posture"],
+                pass_score=self.cfg.get("pass_score"),
                 log=log,
             )
             log(f"window result: {result}")
@@ -293,6 +320,13 @@ class BreatheApp(rumps.App):
             datetime.now().astimezone() + timedelta(minutes=3),
         )
         subprocess.Popen([APP_EXECUTABLE, "--preview"])
+
+    def on_settings(self, _):
+        self.next_check = max(
+            self.next_check,
+            datetime.now().astimezone() + timedelta(minutes=3),
+        )
+        subprocess.Popen([APP_EXECUTABLE, "--settings"])
 
     def on_pause_hour(self, _):
         self.paused_until = datetime.now().astimezone() + timedelta(hours=1)
@@ -356,7 +390,10 @@ class BreatheApp(rumps.App):
 
     def run_capture(self, key):
         try:
-            value, error = vision.calibrate(8)
+            os.makedirs(CAPTURE_DIR, exist_ok=True)
+            kind = "tall" if key == "posture_tall" else "slouch"
+            value, error = vision.calibrate(
+                8, snapshot_path=os.path.join(CAPTURE_DIR, f"{kind}.jpg"))
             if error == "camera":
                 notify("Camera unavailable. Check System Settings → "
                        "Privacy & Security → Camera, then try again.")
@@ -366,6 +403,8 @@ class BreatheApp(rumps.App):
                 return
             first_time = self.cfg["posture_tall"] is None
             self.cfg[key] = value
+            self.cfg[f"{key}_at"] = datetime.now().astimezone().strftime(
+                "%-I:%M %p, %b %-d")
             self.save()
             tall, slouch = self.cfg["posture_tall"], self.cfg["posture_slouch"]
             log(f"captured {key}={value}")
@@ -435,9 +474,14 @@ class BreatheApp(rumps.App):
 
 
 if __name__ == "__main__":
+    if "--settings" in sys.argv:
+        import settings_server
+        settings_server.main()
+        sys.exit(0)
     if "--preview" in sys.argv:
         _cfg = load_config()
-        vision.preview(_cfg["posture_tall"], _cfg["posture_slouch"])
+        vision.preview(_cfg["posture_tall"], _cfg["posture_slouch"],
+                       pass_score=_cfg.get("pass_score"))
         sys.exit(0)
     if already_running():
         log("another instance is already running — exiting")
