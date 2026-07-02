@@ -78,25 +78,14 @@ def load_config():
             cfg.update(json.load(f))
     except (FileNotFoundError, json.JSONDecodeError):
         pass
-    # Migrate pre-two-point configs: old single baseline becomes the tall pose.
+    # Migrate older configs: single float baselines become feature dicts.
     old = cfg.pop("baseline_posture", None)
     if old is not None and cfg.get("posture_tall") is None:
         cfg["posture_tall"] = old
+    for key in ("posture_tall", "posture_slouch"):
+        if isinstance(cfg.get(key), (int, float)):
+            cfg[key] = {"height": cfg[key]}
     return cfg
-
-
-def posture_threshold(cfg):
-    """The pass line for 'sitting tall'.
-
-    With both poses captured: 55% of the way up from slouch to tall.
-    With only a tall pose: 88% of it (legacy behavior). None = don't judge.
-    """
-    tall, slouch = cfg.get("posture_tall"), cfg.get("posture_slouch")
-    if tall is None:
-        return None
-    if slouch is None or slouch >= tall:
-        return tall * 0.88
-    return slouch + 0.55 * (tall - slouch)
 
 
 def already_running():
@@ -249,7 +238,8 @@ class BreatheApp(rumps.App):
             log("window open")
             result = vision.watch_window(
                 self.cfg["window_sec"],
-                posture_threshold(self.cfg),
+                self.cfg["posture_tall"],
+                self.cfg["posture_slouch"],
                 self.cfg["remind_breath"],
                 self.cfg["remind_posture"],
                 log=log,
@@ -378,14 +368,21 @@ class BreatheApp(rumps.App):
             self.cfg[key] = value
             self.save()
             tall, slouch = self.cfg["posture_tall"], self.cfg["posture_slouch"]
-            threshold = posture_threshold(self.cfg)
-            log(f"captured {key}={value:.3f} → threshold {threshold}")
-            if key == "posture_slouch" and tall is not None and slouch >= tall:
-                notify("Hmm — that slouch measured taller than your good posture. "
-                       "Recapture both when you get a chance.")
-            elif tall is not None and slouch is not None:
-                notify(f"Got it. Pass line is now {threshold:.2f} "
-                       f"(your slouch {slouch:.2f} ↔ your tall {tall:.2f}).")
+            log(f"captured {key}={value}")
+            if tall and slouch:
+                diffs = []
+                for k in tall:
+                    if k in slouch:
+                        ref = (abs(tall[k]) + abs(slouch[k])) / 2.0
+                        if ref and abs(tall[k] - slouch[k]) / ref >= vision.MIN_FEATURE_GAP:
+                            diffs.append("head height" if k == "height"
+                                         else "head-to-screen distance")
+                if not diffs:
+                    notify("Those two poses look identical to the camera — "
+                           "exaggerate the difference and recapture both.")
+                else:
+                    notify(f"Got it — it can tell them apart by "
+                           f"{' and '.join(diffs)}.")
             else:
                 notify("Got it. Now capture the other posture "
                        "(both buttons are in the menu).")
@@ -439,7 +436,8 @@ class BreatheApp(rumps.App):
 
 if __name__ == "__main__":
     if "--preview" in sys.argv:
-        vision.preview(posture_threshold(load_config()))
+        _cfg = load_config()
+        vision.preview(_cfg["posture_tall"], _cfg["posture_slouch"])
         sys.exit(0)
     if already_running():
         log("another instance is already running — exiting")

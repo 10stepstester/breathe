@@ -16,13 +16,20 @@ import cv2
 import mediapipe as mp
 
 NOSE, L_SHOULDER, R_SHOULDER = 0, 11, 12
+L_EYE_OUTER, R_EYE_OUTER = 3, 6
 
 # Deep breath = shoulder-rise excursion bigger than this fraction of shoulder width,
 # within a rolling 6-second span. Normal breathing barely moves the shoulders.
 BREATH_AMPLITUDE_FRAC = 0.06
 BREATH_SPAN_SEC = 6.0
+# Posture score: 0 = looks like your captured slouch, 1 = like your captured
+# tall pose, judged on whichever features actually differ between the two.
+# Pass = sustained score above PASS_SCORE over the last 3 seconds.
+PASS_SCORE = 0.55
+# Features whose tall/slouch gap is under 3% are noise — ignored.
+MIN_FEATURE_GAP = 0.03
 # Fallback when only a tall pose is calibrated (no slouch reference):
-# sitting tall = ratio >= 88% of the tall baseline, sustained over 3 seconds.
+# sitting tall = height ratio >= 88% of the tall baseline.
 POSTURE_OK_FRAC = 0.88
 POSTURE_SPAN_SEC = 3.0
 TARGET_FPS = 15
@@ -79,7 +86,14 @@ def camera_in_use_elsewhere():
 
 
 def _landmarks(results):
-    """Return (nose_y, shoulder_mid_y, shoulder_width) or None if not visible."""
+    """Return (features, shoulder_mid_y, shoulder_width) or None if not visible.
+
+    Features (all scaled by shoulder width so camera distance cancels out):
+      height — how high the nose rides above the shoulder line (drops on slouch)
+      face   — apparent eye-to-eye size (grows when the head juts toward the
+               screen — the dominant slouch signal when the camera is low,
+               e.g. laptop on lap)
+    """
     if not results.pose_landmarks:
         return None
     lm = results.pose_landmarks.landmark
@@ -89,10 +103,55 @@ def _landmarks(results):
     width = abs(ls.x - rs.x)
     if width < 0.05:
         return None
-    return nose.y, (ls.y + rs.y) / 2.0, width
+    shoulder_y = (ls.y + rs.y) / 2.0
+    feats = {"height": (shoulder_y - nose.y) / width}
+    le, re = lm[L_EYE_OUTER], lm[R_EYE_OUTER]
+    if min(le.visibility, re.visibility) >= 0.5:
+        eye_dist = ((le.x - re.x) ** 2 + (le.y - re.y) ** 2) ** 0.5
+        feats["face"] = eye_dist / width
+    return feats, shoulder_y, width
 
 
-def watch_window(window_sec, posture_threshold, check_breath, check_posture,
+def posture_score(feats, tall, slouch):
+    """Where the current pose sits between the two references.
+
+    0 = exactly your slouch, 1 = exactly your tall pose (can overshoot either
+    way). Each feature votes, weighted by how far apart the two references
+    are on it; features that barely differ are ignored. None = the references
+    don't differ enough on anything to judge.
+    """
+    votes, weights = [], []
+    for key, value in feats.items():
+        t, s = tall.get(key), slouch.get(key)
+        if t is None or s is None:
+            continue
+        ref = (abs(t) + abs(s)) / 2.0
+        gap = t - s
+        if ref == 0 or abs(gap) < MIN_FEATURE_GAP * ref:
+            continue
+        votes.append((value - s) / gap)
+        weights.append(abs(gap) / ref)
+    if not votes:
+        return None
+    return sum(v * w for v, w in zip(votes, weights)) / sum(weights)
+
+
+def _pose_score(feats, tall, slouch):
+    """Score against available references; legacy height-only if no slouch."""
+    if slouch:
+        return posture_score(feats, tall, slouch)
+    t = tall.get("height")
+    h = feats.get("height")
+    if t and h:
+        return h / t
+    return None
+
+
+def _pass_line(slouch):
+    return PASS_SCORE if slouch else POSTURE_OK_FRAC
+
+
+def watch_window(window_sec, tall, slouch, check_breath, check_posture,
                  log=None):
     """Open the camera for up to window_sec seconds and watch for the good stuff.
 
@@ -112,10 +171,10 @@ def watch_window(window_sec, posture_threshold, check_breath, check_posture,
         min_tracking_confidence=0.5,
     )
     shoulder_samples = []  # (t, smoothed shoulder_mid_y, shoulder_width)
-    posture_samples = []   # (t, nose-to-shoulder ratio)
+    posture_samples = []   # (t, posture score)
     ema = None
     breath_done = not check_breath
-    posture_done = not check_posture or posture_threshold is None
+    posture_done = not check_posture or not tall
     deadline = time.monotonic() + window_sec
 
     try:
@@ -130,10 +189,13 @@ def watch_window(window_sec, posture_threshold, check_breath, check_posture,
             now = time.monotonic()
             if lms is not None:
                 result["present"] = True
-                nose_y, shoulder_y, width = lms
+                feats, shoulder_y, width = lms
                 ema = shoulder_y if ema is None else 0.3 * shoulder_y + 0.7 * ema
                 shoulder_samples.append((now, ema, width))
-                posture_samples.append((now, (shoulder_y - nose_y) / width))
+                if tall:
+                    score = _pose_score(feats, tall, slouch)
+                    if score is not None:
+                        posture_samples.append((now, score))
 
                 if not breath_done:
                     recent = [s for s in shoulder_samples if now - s[0] <= BREATH_SPAN_SEC]
@@ -148,7 +210,7 @@ def watch_window(window_sec, posture_threshold, check_breath, check_posture,
                 if not posture_done:
                     recent = [s for s in posture_samples if now - s[0] <= POSTURE_SPAN_SEC]
                     if len(recent) >= 10:
-                        if median(s[1] for s in recent) >= posture_threshold:
+                        if median(s[1] for s in recent) >= _pass_line(slouch):
                             posture_done = True
                             if log:
                                 log("sitting tall detected")
@@ -166,7 +228,7 @@ def watch_window(window_sec, posture_threshold, check_breath, check_posture,
     return result
 
 
-def preview(posture_threshold, max_sec=120):
+def preview(tall, slouch, max_sec=120):
     """Live debug window: skeleton dots + the exact numbers being judged.
 
     Runs as its own process (--preview) because macOS GUI windows must own
@@ -211,25 +273,34 @@ def preview(posture_threshold, max_sec=120):
             if lms is None:
                 put(frame, "Can't see nose + both shoulders", 40, (0, 0, 255))
             else:
-                nose_y, shoulder_y, width = lms
+                feats, shoulder_y, width = lms
                 ema = shoulder_y if ema is None else 0.3 * shoulder_y + 0.7 * ema
                 shoulder_samples.append((now, ema, width))
                 shoulder_samples = [
                     s for s in shoulder_samples if now - s[0] <= BREATH_SPAN_SEC
                 ]
 
-                ratio = (shoulder_y - nose_y) / width
-                if posture_threshold:
-                    need = posture_threshold
-                    tall = ratio >= need
-                    put(frame,
-                        f"posture {ratio:.2f}  (tall = {need:.2f}+)",
-                        40, (0, 200, 0) if tall else (0, 0, 255))
-                    put(frame, "SITTING TALL" if tall else "SLOUCHED",
-                        80, (0, 200, 0) if tall else (0, 0, 255), 1.0)
+                if tall:
+                    score = _pose_score(feats, tall, slouch)
+                    need = _pass_line(slouch)
+                    if score is None:
+                        put(frame,
+                            "Poses too similar to judge - recapture both",
+                            40, (0, 200, 255))
+                    else:
+                        ok = score >= need
+                        label = (f"posture score {score:.2f}  (pass = {need:.2f}+"
+                                 + (", 0 = your slouch, 1 = your tall)" if slouch
+                                    else ")"))
+                        put(frame, label, 40, (0, 200, 0) if ok else (0, 0, 255))
+                        put(frame, "SITTING TALL" if ok else "SLOUCHED",
+                            80, (0, 200, 0) if ok else (0, 0, 255), 1.0)
                 else:
-                    put(frame, f"posture {ratio:.2f} (not calibrated yet)",
-                        40, (0, 200, 255))
+                    put(frame, "not calibrated yet", 40, (0, 200, 255))
+                detail = f"raw: height {feats['height']:.2f}"
+                if "face" in feats:
+                    detail += f"   face {feats['face']:.2f}"
+                put(frame, detail, frame.shape[0] - 20, (200, 200, 200), 0.55)
 
                 if len(shoulder_samples) >= 10:
                     ys = [s[1] for s in shoulder_samples]
@@ -260,16 +331,16 @@ def preview(posture_threshold, max_sec=120):
 
 
 def calibrate(seconds=10):
-    """Capture the sitting-tall posture baseline.
+    """Capture a posture reference (hold the pose while it runs).
 
-    Returns (ratio, None) on success, (None, "camera") if the camera couldn't
-    open, or (None, "not_visible") if no clear view of nose + shoulders.
+    Returns (features dict, None) on success, (None, "camera") if the camera
+    couldn't open, or (None, "not_visible") if no clear view of the body.
     """
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         return None, "camera"
     pose = mp.solutions.pose.Pose(model_complexity=0, min_detection_confidence=0.5)
-    ratios = []
+    samples = []
     deadline = time.monotonic() + seconds
     try:
         while time.monotonic() < deadline:
@@ -280,12 +351,18 @@ def calibrate(seconds=10):
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             lms = _landmarks(pose.process(frame))
             if lms is not None:
-                nose_y, shoulder_y, width = lms
-                ratios.append((shoulder_y - nose_y) / width)
+                samples.append(lms[0])
             time.sleep(1.0 / TARGET_FPS)
     finally:
         cap.release()
         pose.close()
-    if len(ratios) < 30:
+    if len(samples) < 30:
         return None, "not_visible"
-    return median(ratios), None
+    feats = {}
+    for key in set().union(*samples):
+        vals = [s[key] for s in samples if key in s]
+        if len(vals) >= 30:
+            feats[key] = median(vals)
+    if "height" not in feats:
+        return None, "not_visible"
+    return feats, None
