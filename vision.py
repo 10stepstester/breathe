@@ -3,8 +3,14 @@
 All detection happens locally. No frames are ever saved or sent anywhere.
 """
 import ctypes
+import os
 import time
 from statistics import median
+
+# Permission is requested properly on the main thread at app startup (see
+# breathe.py); without this flag OpenCV tries to re-request from the capture
+# thread and aborts.
+os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
 
 import cv2
 import mediapipe as mp
@@ -160,10 +166,14 @@ def watch_window(window_sec, baseline, check_breath, check_posture, log=None):
 
 
 def calibrate(seconds=10):
-    """Capture the sitting-tall posture baseline. Returns ratio or None."""
+    """Capture the sitting-tall posture baseline.
+
+    Returns (ratio, None) on success, (None, "camera") if the camera couldn't
+    open, or (None, "not_visible") if no clear view of nose + shoulders.
+    """
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        return None
+        return None, "camera"
     pose = mp.solutions.pose.Pose(model_complexity=0, min_detection_confidence=0.5)
     ratios = []
     deadline = time.monotonic() + seconds
@@ -183,5 +193,5 @@ def calibrate(seconds=10):
         cap.release()
         pose.close()
     if len(ratios) < 30:
-        return None
-    return median(ratios)
+        return None, "not_visible"
+    return median(ratios), None

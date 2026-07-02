@@ -12,6 +12,7 @@ import math
 from datetime import datetime, timedelta
 
 import rumps
+from AVFoundation import AVCaptureDevice, AVMediaTypeVideo
 
 import vision
 
@@ -19,7 +20,8 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 PID_PATH = os.path.join(APP_DIR, "breathe.pid")
 PLIST_PATH = os.path.expanduser("~/Library/LaunchAgents/com.ladd.breathe.plist")
-PYTHON = os.path.join(APP_DIR, "venv", "bin", "python")
+APP_EXECUTABLE = os.path.join(APP_DIR, "dist", "Breathe.app", "Contents",
+                              "MacOS", "Breathe")
 
 INTERVAL_CHOICES = [5, 10, 15, 20, 30]
 WINDOW_CHOICES = [30, 45, 60, 90]
@@ -47,6 +49,27 @@ def notify(text):
     )
 
 
+def ensure_camera_permission():
+    """Request camera access on the main thread at startup.
+
+    Status codes: 0 = not asked yet, 1 = restricted, 2 = denied, 3 = granted.
+    """
+    status = AVCaptureDevice.authorizationStatusForMediaType_(AVMediaTypeVideo)
+    if status == 3:
+        return
+    if status == 0:
+        def done(granted):
+            log(f"camera permission granted: {granted}")
+            if not granted:
+                notify("Camera permission denied — enable Breathe in "
+                       "System Settings → Privacy & Security → Camera.")
+        AVCaptureDevice.requestAccessForMediaType_completionHandler_(
+            AVMediaTypeVideo, done)
+    else:
+        notify("Camera permission needed — enable Breathe in "
+               "System Settings → Privacy & Security → Camera.")
+
+
 def load_config():
     cfg = dict(DEFAULTS)
     try:
@@ -64,7 +87,7 @@ def already_running():
         os.kill(pid, 0)
         out = subprocess.run(["ps", "-p", str(pid), "-o", "command="],
                              capture_output=True, text=True).stdout
-        return "breathe.py" in out
+        return "breathe" in out.lower()
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
         return False
 
@@ -72,6 +95,7 @@ def already_running():
 class BreatheApp(rumps.App):
     def __init__(self):
         super().__init__("Breathe", title="🫁", quit_button=None)
+        ensure_camera_permission()
         self.cfg = load_config()
         self.watching = False
         self.calibrating = False
@@ -82,6 +106,7 @@ class BreatheApp(rumps.App):
 
         self.status_item = rumps.MenuItem("Starting up")
         self.stats_item = rumps.MenuItem("")
+        self.check_now = rumps.MenuItem("Check now", callback=self.on_check_now)
         self.pause_hour = rumps.MenuItem("Pause for 1 hour", callback=self.on_pause_hour)
         self.pause_day = rumps.MenuItem("Pause until tomorrow", callback=self.on_pause_day)
         self.resume_item = rumps.MenuItem("Resume now", callback=self.on_resume)
@@ -102,6 +127,7 @@ class BreatheApp(rumps.App):
             self.status_item,
             self.stats_item,
             None,
+            self.check_now,
             self.pause_hour,
             self.pause_day,
             self.resume_item,
@@ -230,6 +256,17 @@ class BreatheApp(rumps.App):
 
     # ---- callbacks ----
 
+    def on_check_now(self, _):
+        if self.watching or self.calibrating:
+            return
+        if self.cfg["baseline_posture"] is None:
+            notify("Calibrate first — click Recalibrate posture in the menu.")
+            return
+        self.paused_until = None
+        self.sync_menu_state()
+        self.start_window()
+        self.tick()
+
     def on_pause_hour(self, _):
         self.paused_until = datetime.now().astimezone() + timedelta(hours=1)
         self.sync_menu_state()
@@ -286,8 +323,12 @@ class BreatheApp(rumps.App):
 
     def run_calibration(self):
         try:
-            baseline = vision.calibrate(10)
-            if baseline is None:
+            baseline, error = vision.calibrate(10)
+            if error == "camera":
+                notify("Camera unavailable. Check System Settings → "
+                       "Privacy & Security → Camera, then try again.")
+                return
+            if error == "not_visible":
                 notify("Couldn't see you clearly. Face the camera and try again.")
                 return
             first_time = self.cfg["baseline_posture"] is None
@@ -323,8 +364,7 @@ class BreatheApp(rumps.App):
     <key>Label</key><string>com.ladd.breathe</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{PYTHON}</string>
-        <string>{os.path.join(APP_DIR, "breathe.py")}</string>
+        <string>{APP_EXECUTABLE}</string>
     </array>
     <key>WorkingDirectory</key><string>{APP_DIR}</string>
     <key>RunAtLoad</key><true/>
