@@ -184,7 +184,7 @@ def feature_gaps(tall, slouch):
 
 
 def watch_window(window_sec, tall, slouch, check_breath, check_posture,
-                 pass_score=None, log=None):
+                 pass_score=None, log=None, on_breath=None):
     """Open the camera for up to window_sec seconds and watch for the good stuff.
 
     Returns {"present": bool, "breath": bool, "posture": bool, "error": str|None}.
@@ -238,6 +238,8 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
                             breath_done = True
                             if log:
                                 log("deep breath detected")
+                            if on_breath:
+                                on_breath()
 
                 if not posture_done:
                     recent = [s for s in posture_samples if now - s[0] <= POSTURE_SPAN_SEC]

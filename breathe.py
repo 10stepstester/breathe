@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 import rumps
 from AVFoundation import AVCaptureDevice, AVMediaTypeVideo
 
+import shimmer
 import vision
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +37,7 @@ DEFAULTS = {
     "posture_tall_at": None,
     "posture_slouch_at": None,
     "pass_score": 0.55,
+    "shimmer": True,
     "stats": {"date": "", "caught": 0, "pinged": 0},
 }
 CAPTURE_DIR = os.path.join(APP_DIR, "captures")
@@ -134,6 +136,7 @@ class BreatheApp(rumps.App):
 
         self.breath_item = rumps.MenuItem("Deep breaths", callback=self.on_toggle_breath)
         self.posture_item = rumps.MenuItem("Sitting tall", callback=self.on_toggle_posture)
+        self.shimmer_item = rumps.MenuItem("Shimmer on deep breath", callback=self.on_toggle_shimmer)
         self.tall_item = rumps.MenuItem(
             "I'm sitting how I want — capture it", callback=self.on_set_tall)
         self.slouch_item = rumps.MenuItem(
@@ -156,6 +159,7 @@ class BreatheApp(rumps.App):
             None,
             self.breath_item,
             self.posture_item,
+            self.shimmer_item,
             None,
             self.tall_item,
             self.slouch_item,
@@ -214,6 +218,7 @@ class BreatheApp(rumps.App):
             item.state = 1 if item.title == f"{self.cfg['window_sec']} sec" else 0
         self.breath_item.state = 1 if self.cfg["remind_breath"] else 0
         self.posture_item.state = 1 if self.cfg["remind_posture"] else 0
+        self.shimmer_item.state = 1 if self.cfg.get("shimmer", True) else 0
         self.login_item.state = 1 if os.path.exists(PLIST_PATH) else 0
         self.resume_item.set_callback(self.on_resume if self.paused_until else None)
 
@@ -270,6 +275,7 @@ class BreatheApp(rumps.App):
                 self.cfg["remind_posture"],
                 pass_score=self.cfg.get("pass_score"),
                 log=log,
+                on_breath=(shimmer.show if self.cfg.get("shimmer", True) else None),
             )
             log(f"window result: {result}")
             if result["error"] == "camera":
@@ -365,6 +371,13 @@ class BreatheApp(rumps.App):
         self.cfg["remind_breath"] = not self.cfg["remind_breath"]
         self.save()
         self.sync_menu_state()
+
+    def on_toggle_shimmer(self, _):
+        self.cfg["shimmer"] = not self.cfg.get("shimmer", True)
+        self.save()
+        self.sync_menu_state()
+        if self.cfg["shimmer"]:
+            shimmer.show()
 
     def on_toggle_posture(self, _):
         self.cfg["remind_posture"] = not self.cfg["remind_posture"]
