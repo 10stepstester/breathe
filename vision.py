@@ -31,6 +31,9 @@ BREATH_SPAN_SEC = 10.0
 # tall pose, judged on whichever features actually differ between the two.
 # Pass = sustained score above PASS_SCORE over the last 3 seconds.
 PASS_SCORE = 0.55
+# Lap-vs-desk: shoulders sitting below this frame height (or mostly cut off
+# while the face is visible) reads as a lap/tilted-up setup.
+LAP_SHOULDER_Y = 0.78
 # Features whose tall/slouch gap is under 3% are noise — ignored.
 MIN_FEATURE_GAP = 0.03
 # Fallback when only a tall pose is calibrated (no slouch reference):
@@ -224,7 +227,7 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
     that early shutoff is the reward signal.
     """
     result = {"present": False, "breath": False, "posture": False,
-              "error": None, "aborted": False}
+              "error": None, "aborted": False, "setting": None}
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         result["error"] = "camera"
@@ -240,6 +243,8 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
     ema = None
     breath_done = not check_breath
     posture_done = not check_posture or not tall
+    nose_frames = 0
+    seen_shoulder_ys = []
     deadline = time.monotonic() + window_sec
 
     try:
@@ -253,7 +258,16 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
                 time.sleep(0.1)
                 continue
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            lms = _landmarks(pose.process(frame))
+            res = pose.process(frame)
+            lms = _landmarks(res)
+            # Lap-vs-desk telemetry: face visible, where are the shoulders?
+            if res.pose_landmarks:
+                _lm = res.pose_landmarks.landmark
+                if _lm[NOSE].visibility > 0.5:
+                    nose_frames += 1
+                    _ls, _rs = _lm[L_SHOULDER], _lm[R_SHOULDER]
+                    if min(_ls.visibility, _rs.visibility) > 0.5:
+                        seen_shoulder_ys.append((_ls.y + _rs.y) / 2.0)
             now = time.monotonic()
             if lms is not None:
                 result["present"] = True
@@ -291,6 +305,12 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
     finally:
         cap.release()
         pose.close()
+
+    if not result["aborted"] and nose_frames >= 15:
+        lappish = (len(seen_shoulder_ys) < nose_frames * 0.5
+                   or (seen_shoulder_ys
+                       and median(seen_shoulder_ys) > LAP_SHOULDER_Y))
+        result["setting"] = "lap" if lappish else "desk"
 
     result["breath"] = breath_done
     result["posture"] = posture_done

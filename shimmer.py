@@ -4,9 +4,10 @@ A borderless, click-through, all-spaces window above everything; it never takes
 focus, so whatever you're doing is untouched. Must run on the main thread —
 show() is safe to call from any thread.
 """
+import time
+
 import AppKit
-from Foundation import NSOperationQueue
-from PyObjCTools import AppHelper
+from Foundation import NSOperationQueue, NSRunLoop, NSRunLoopCommonModes
 
 _active = []  # keep refs so in-flight windows aren't garbage-collected
 
@@ -65,22 +66,27 @@ def _show_on_main(duration, color=GLOW_RGBA):
     win.orderFrontRegardless()
     _active.append(win)
 
-    AppKit.NSAnimationContext.beginGrouping()
-    AppKit.NSAnimationContext.currentContext().setDuration_(FADE_IN)
-    win.animator().setAlphaValue_(1.0)
-    AppKit.NSAnimationContext.endGrouping()
+    # Manual alpha ramp on a plain timer — implicit Cocoa animations silently
+    # no-op inside this LSUIElement/rumps process, leaving the window at 0%.
+    t0 = time.monotonic()
+    total = FADE_IN + HOLD + duration
 
-    def fade_out():
-        AppKit.NSAnimationContext.beginGrouping()
-        AppKit.NSAnimationContext.currentContext().setDuration_(duration)
-        win.animator().setAlphaValue_(0.0)
-        AppKit.NSAnimationContext.endGrouping()
-
-        def close():
+    def tick(timer):
+        elapsed = time.monotonic() - t0
+        if elapsed >= total:
+            timer.invalidate()
             win.orderOut_(None)
             if win in _active:
                 _active.remove(win)
+            print("shimmer: done", flush=True)
+            return
+        if elapsed < FADE_IN:
+            alpha = elapsed / FADE_IN
+        elif elapsed < FADE_IN + HOLD:
+            alpha = 1.0
+        else:
+            alpha = max(0.0, 1.0 - (elapsed - FADE_IN - HOLD) / duration)
+        win.setAlphaValue_(alpha)
 
-        AppHelper.callLater(duration + 0.2, close)
-
-    AppHelper.callLater(FADE_IN + HOLD, fade_out)
+    timer = AppKit.NSTimer.timerWithTimeInterval_repeats_block_(1 / 30.0, True, tick)
+    NSRunLoop.mainRunLoop().addTimer_forMode_(timer, NSRunLoopCommonModes)

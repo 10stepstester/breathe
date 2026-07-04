@@ -40,7 +40,12 @@ DEFAULTS = {
     "pass_score": 0.55,
     "shimmer": True,
     "stats": {"date": "", "caught": 0, "pinged": 0},
+    "lap_alert_min": 90,
 }
+
+
+def fmt_minutes(m):
+    return f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
 CAPTURE_DIR = os.path.join(APP_DIR, "captures")
 
 
@@ -122,6 +127,7 @@ class BreatheApp(rumps.App):
 
         self.status_item = rumps.MenuItem("Starting up")
         self.stats_item = rumps.MenuItem("")
+        self.setting_item = rumps.MenuItem("")
         self.check_now = rumps.MenuItem("Check now", callback=self.on_check_now)
         self.preview_item = rumps.MenuItem("Show what it sees…", callback=self.on_preview)
         self.settings_item = rumps.MenuItem("Settings…", callback=self.on_settings)
@@ -148,6 +154,7 @@ class BreatheApp(rumps.App):
         self.menu = [
             self.status_item,
             self.stats_item,
+            self.setting_item,
             None,
             self.check_now,
             self.preview_item,
@@ -208,7 +215,9 @@ class BreatheApp(rumps.App):
     def roll_stats(self):
         today = datetime.now().astimezone().date().isoformat()
         if self.cfg["stats"].get("date") != today:
-            self.cfg["stats"] = {"date": today, "caught": 0, "pinged": 0}
+            self.cfg["stats"] = {"date": today, "caught": 0, "pinged": 0,
+                                 "lap_min": 0, "desk_min": 0,
+                                 "lap_alerted": False}
             self.save()
 
     # ---- menu state ----
@@ -230,6 +239,10 @@ class BreatheApp(rumps.App):
         now = datetime.now().astimezone()
         s = self.cfg["stats"]
         self.stats_item.title = f"Today: caught {s['caught']} · pinged {s['pinged']}"
+        lap, desk = s.get("lap_min", 0), s.get("desk_min", 0)
+        self.setting_item.title = (
+            f"Lap {fmt_minutes(lap)} · desk {fmt_minutes(desk)}"
+            if lap or desk else "No lap/desk time logged yet today")
 
         if self.paused_until and now >= self.paused_until:
             self.paused_until = None
@@ -284,6 +297,19 @@ class BreatheApp(rumps.App):
             log(f"window result: {result}")
             if result.get("aborted"):
                 return  # user opened the preview mid-check — no stats, no ping
+            setting = result.get("setting")
+            if setting:
+                key = "lap_min" if setting == "lap" else "desk_min"
+                self.cfg["stats"][key] = (self.cfg["stats"].get(key, 0)
+                                          + self.cfg["interval_min"])
+                lap_total = self.cfg["stats"].get("lap_min", 0)
+                if (setting == "lap"
+                        and lap_total >= self.cfg.get("lap_alert_min", 90)
+                        and not self.cfg["stats"].get("lap_alerted")):
+                    self.cfg["stats"]["lap_alerted"] = True
+                    notify(f"Laptop's been on your lap about "
+                           f"{fmt_minutes(lap_total)} today — table time?")
+                self.save()
             if result["error"] == "camera":
                 notify("Camera unavailable. Check System Settings → Privacy & Security → Camera.")
                 return
