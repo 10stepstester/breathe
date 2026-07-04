@@ -21,7 +21,9 @@ L_EYE_OUTER, R_EYE_OUTER = 3, 6
 # Deep breath = shoulder-rise excursion bigger than this fraction of shoulder width,
 # within a rolling 6-second span. Normal breathing barely moves the shoulders.
 BREATH_AMPLITUDE_FRAC = 0.06
-BREATH_SPAN_SEC = 6.0
+# Must hold the full rise-and-return: a slow deliberate breath is ~8 s round
+# trip, so anything under ~10 s can never see one whole.
+BREATH_SPAN_SEC = 10.0
 # Posture score: 0 = looks like your captured slouch, 1 = like your captured
 # tall pose, judged on whichever features actually differ between the two.
 # Pass = sustained score above PASS_SCORE over the last 3 seconds.
@@ -205,8 +207,9 @@ def _breath_in(recent):
     before = max(ys[:i_min])
     after = max(ys[i_min + 1:])
     low = ys[i_min]
-    # Shoulders rose from a settled level AND came most of the way back down.
-    return (before - low) >= 0.6 * amp and (after - low) >= 0.4 * amp
+    # Shoulders rose from a settled level AND started clearly back down
+    # (30% of the excursion — credits a slow exhale without waiting it out).
+    return (before - low) >= 0.6 * amp and (after - low) >= 0.3 * amp
 
 
 def watch_window(window_sec, tall, slouch, check_breath, check_posture,
