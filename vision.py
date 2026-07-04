@@ -20,7 +20,10 @@ L_EYE_OUTER, R_EYE_OUTER = 3, 6
 
 # Deep breath = shoulder-rise excursion bigger than this fraction of shoulder width,
 # within a rolling 6-second span. Normal breathing barely moves the shoulders.
-BREATH_AMPLITUDE_FRAC = 0.06
+# 4% of shoulder width ~ a normal deliberate deep breath's shoulder rise.
+# Below ~3%, resting breathing and camera jitter start to pass; the
+# rise-and-return shape gates in _breath_in do the rest of the policing.
+BREATH_AMPLITUDE_FRAC = 0.04
 # Must hold the full rise-and-return: a slow deliberate breath is ~8 s round
 # trip, so anything under ~10 s can never see one whole.
 BREATH_SPAN_SEC = 10.0
