@@ -5,6 +5,7 @@ focus, so whatever you're doing is untouched. Must run on the main thread —
 show() is safe to call from any thread.
 """
 import AppKit
+from Foundation import NSOperationQueue
 from PyObjCTools import AppHelper
 
 _active = []  # keep refs so in-flight windows aren't garbage-collected
@@ -34,12 +35,16 @@ class _GlowView(AppKit.NSView):
 
 def show(duration=1.2, color=GLOW_RGBA):
     """Flash the glow once. Thread-safe."""
-    AppHelper.callAfter(_show_on_main, duration, color)
+    print("shimmer: scheduling", flush=True)
+    NSOperationQueue.mainQueue().addOperationWithBlock_(
+        lambda: _show_on_main(duration, color))
 
 
 def _show_on_main(duration, color=GLOW_RGBA):
+    print("shimmer: showing on main thread", flush=True)
     screen = AppKit.NSScreen.mainScreen()
     if screen is None:
+        print("shimmer: no screen", flush=True)
         return
     frame = screen.frame()
     win = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(

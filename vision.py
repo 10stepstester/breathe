@@ -216,14 +216,15 @@ def _breath_in(recent):
 
 
 def watch_window(window_sec, tall, slouch, check_breath, check_posture,
-                 pass_score=None, log=None, on_breath=None):
+                 pass_score=None, log=None, on_breath=None, should_abort=None):
     """Open the camera for up to window_sec seconds and watch for the good stuff.
 
     Returns {"present": bool, "breath": bool, "posture": bool, "error": str|None}.
     Ends early (camera light goes off) once everything asked for is satisfied —
     that early shutoff is the reward signal.
     """
-    result = {"present": False, "breath": False, "posture": False, "error": None}
+    result = {"present": False, "breath": False, "posture": False,
+              "error": None, "aborted": False}
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         result["error"] = "camera"
@@ -243,6 +244,9 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
 
     try:
         while time.monotonic() < deadline:
+            if should_abort is not None and should_abort.is_set():
+                result["aborted"] = True
+                break
             frame_start = time.monotonic()
             ok, frame = cap.read()
             if not ok:

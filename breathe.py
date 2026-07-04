@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import math
 from datetime import datetime, timedelta
 
@@ -113,6 +114,7 @@ class BreatheApp(rumps.App):
         self.cfg = load_config()
         self.watching = False
         self.calibrating = False
+        self.abort_window = threading.Event()
         self.paused_until = None
         self.next_check = datetime.now().astimezone() + timedelta(
             minutes=self.cfg["interval_min"]
@@ -263,6 +265,7 @@ class BreatheApp(rumps.App):
 
     def run_window(self):
         try:
+            self.abort_window.clear()
             if vision.camera_in_use_elsewhere():
                 log("camera busy elsewhere — skipping this window")
                 return
@@ -276,8 +279,11 @@ class BreatheApp(rumps.App):
                 pass_score=self.cfg.get("pass_score"),
                 log=log,
                 on_breath=(shimmer.show if self.cfg.get("shimmer", True) else None),
+                should_abort=self.abort_window,
             )
             log(f"window result: {result}")
+            if result.get("aborted"):
+                return  # user opened the preview mid-check — no stats, no ping
             if result["error"] == "camera":
                 notify("Camera unavailable. Check System Settings → Privacy & Security → Camera.")
                 return
@@ -318,9 +324,15 @@ class BreatheApp(rumps.App):
         self.tick()
 
     def on_preview(self, _):
-        if self.watching or self.calibrating:
-            notify("Camera is mid-check — try again in a minute.")
+        if self.calibrating:
+            notify("Mid-calibration — try again in a few seconds.")
             return
+        if self.watching:
+            self.abort_window.set()
+            for _ in range(30):  # watch loop notices within a frame or two
+                if not self.watching:
+                    break
+                time.sleep(0.1)
         # The preview holds the camera, which makes scheduled checks skip
         # themselves (camera-busy check), so no guard needed beyond a nudge.
         self.next_check = max(
