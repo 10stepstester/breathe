@@ -290,6 +290,8 @@ class BreatheApp(rumps.App):
                 misses.append("straighten up")
             if misses:
                 self.cfg["stats"]["pinged"] += 1
+                if self.cfg.get("shimmer", True):
+                    shimmer.show(color=shimmer.MISS_RGBA)
                 notify(" and ".join(misses).capitalize() + ".")
             else:
                 self.cfg["stats"]["caught"] += 1

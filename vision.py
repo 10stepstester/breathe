@@ -183,6 +183,32 @@ def feature_gaps(tall, slouch):
     return out
 
 
+def _breath_in(recent):
+    """True if the shoulder trace shows a rise-and-return — a breath's round
+    trip — rather than a posture step (move and stay) or a lean.
+
+    recent: [(t, smoothed_y, shoulder_width), ...] spanning at least 2 s.
+    """
+    ys = [s[1] for s in recent]
+    widths = [s[2] for s in recent]
+    scale = median(widths)
+    # Leaning toward/away from the camera changes apparent shoulder width;
+    # a real breath doesn't.
+    if (max(widths) - min(widths)) / scale > 0.12:
+        return False
+    amp = max(ys) - min(ys)
+    if amp <= BREATH_AMPLITUDE_FRAC * scale:
+        return False
+    i_min = ys.index(min(ys))
+    if i_min == 0 or i_min == len(ys) - 1:
+        return False  # highest shoulder point is at the edge — still mid-move
+    before = max(ys[:i_min])
+    after = max(ys[i_min + 1:])
+    low = ys[i_min]
+    # Shoulders rose from a settled level AND came most of the way back down.
+    return (before - low) >= 0.6 * amp and (after - low) >= 0.4 * amp
+
+
 def watch_window(window_sec, tall, slouch, check_breath, check_posture,
                  pass_score=None, log=None, on_breath=None):
     """Open the camera for up to window_sec seconds and watch for the good stuff.
@@ -231,15 +257,14 @@ def watch_window(window_sec, tall, slouch, check_breath, check_posture,
 
                 if not breath_done:
                     recent = [s for s in shoulder_samples if now - s[0] <= BREATH_SPAN_SEC]
-                    if len(recent) >= 10 and recent[-1][0] - recent[0][0] >= 2.0:
-                        ys = [s[1] for s in recent]
-                        scale = median(s[2] for s in recent)
-                        if max(ys) - min(ys) > BREATH_AMPLITUDE_FRAC * scale:
-                            breath_done = True
-                            if log:
-                                log("deep breath detected")
-                            if on_breath:
-                                on_breath()
+                    if (len(recent) >= 10
+                            and recent[-1][0] - recent[0][0] >= 2.0
+                            and _breath_in(recent)):
+                        breath_done = True
+                        if log:
+                            log("deep breath detected")
+                        if on_breath:
+                            on_breath()
 
                 if not posture_done:
                     recent = [s for s in posture_samples if now - s[0] <= POSTURE_SPAN_SEC]
@@ -341,10 +366,12 @@ def preview(tall, slouch, pass_score=None, max_sec=120):
                     scale = median(s[2] for s in shoulder_samples)
                     amp = max(ys) - min(ys)
                     need_amp = BREATH_AMPLITUDE_FRAC * scale
-                    if amp > need_amp:
+                    span_ok = shoulder_samples[-1][0] - shoulder_samples[0][0] >= 2.0
+                    if span_ok and _breath_in(shoulder_samples):
                         breath_flash_until = now + 3.0
                     put(frame,
-                        f"shoulder movement {amp:.3f}  (deep breath = {need_amp:.3f}+)",
+                        f"shoulder movement {amp:.3f}  (deep breath = {need_amp:.3f}+ "
+                        f"rise-and-return)",
                         120, (0, 200, 0) if amp > need_amp else (200, 200, 200))
                 if now < breath_flash_until:
                     put(frame, "DEEP BREATH DETECTED", 160, (0, 200, 0), 1.0)
