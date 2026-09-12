@@ -4,3 +4,6 @@ breathe.log
 breathe.pid
 __pycache__/
 captures/
+dist/
+build/
+.DS_Store
