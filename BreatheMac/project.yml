@@ -1,0 +1,39 @@
+# XcodeGen spec. Regenerate the .xcodeproj with:  xcodegen generate
+name: Breathe
+options:
+  bundleIdPrefix: com.laddcarlston
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: A2Y6ZRZSW4
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Breathe:
+    type: application
+    platform: macOS
+    sources: [Breathe]
+    entitlements:
+      path: Breathe/Breathe.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.device.camera: true
+    info:
+      path: Breathe/Info.plist
+      properties:
+        CFBundleDisplayName: Breathe
+        CFBundleName: Breathe
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.healthcare-fitness
+        NSCameraUsageDescription: Breathe turns the camera on for a few seconds at a time to see whether you have sat up and taken a deep breath. Nothing is recorded, saved, or sent anywhere.
+        NSHumanReadableCopyright: © 2026 Dr. Ladd Carlston
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.laddcarlston.breathe
+        PRODUCT_NAME: Breathe
+        GENERATE_INFOPLIST_FILE: NO
